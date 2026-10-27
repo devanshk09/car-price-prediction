@@ -1,0 +1,32 @@
+# CodeDeploy instructions for the EC2 instance (EC2/On-premises platform).
+version: 0.0
+os: linux
+files:
+  - source: /
+    destination: /opt/car-price-prediction
+file_exists_behavior: OVERWRITE
+permissions:
+  - object: /opt/car-price-prediction
+    owner: ubuntu
+    group: ubuntu
+hooks:
+  ApplicationStop:
+    - location: scripts/stop_server.sh
+      timeout: 60
+      runas: root
+  BeforeInstall:
+    - location: scripts/before_install.sh
+      timeout: 120
+      runas: root
+  AfterInstall:
+    - location: scripts/after_install.sh
+      timeout: 900
+      runas: root
+  ApplicationStart:
+    - location: scripts/start_server.sh
+      timeout: 120
+      runas: root
+  ValidateService:
+    - location: scripts/validate_service.sh
+      timeout: 180
+      runas: root

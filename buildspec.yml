@@ -1,0 +1,58 @@
+version: 0.2
+
+# Set MODEL_BUCKET in the CodeBuild project's environment variables
+# (Edit project -> Environment -> Additional configuration -> Environment variables).
+env:
+  shell: bash
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - python -m pip install --upgrade pip
+      - pip install -r requirements.txt
+  pre_build:
+    commands:
+      - if [ -z "${MODEL_BUCKET:-}" ]; then echo "MODEL_BUCKET environment variable is not set on the CodeBuild project"; exit 1; fi
+      - export MODEL_PREFIX="models/builds/${CODEBUILD_BUILD_NUMBER:-manual-$(date +%Y%m%d%H%M%S)}"
+      - echo "Model will be stored at s3://${MODEL_BUCKET}/${MODEL_PREFIX}/"
+  build:
+    commands:
+      # Train first so the tests always run against a freshly built model.
+      - python src/train.py
+      - test -f models/car_price_model.joblib
+      - test -f models/options.json
+      - test -f reports/metrics.json
+      - python -m pytest -q -p no:warnings
+  post_build:
+    commands:
+      # Only publish the model if training and tests succeeded.
+      - if [ "${CODEBUILD_BUILD_SUCCEEDING:-1}" != "1" ]; then echo "Build failed - not uploading model"; exit 1; fi
+      # S3 = model store: every build's model is kept under its build number, and
+      # models/latest/ always points at the newest tested model.
+      - aws s3 cp models/car_price_model.joblib "s3://${MODEL_BUCKET}/${MODEL_PREFIX}/car_price_model.joblib"
+      - aws s3 cp models/options.json "s3://${MODEL_BUCKET}/${MODEL_PREFIX}/options.json"
+      - aws s3 cp reports/metrics.json "s3://${MODEL_BUCKET}/${MODEL_PREFIX}/metrics.json"
+      - aws s3 cp "s3://${MODEL_BUCKET}/${MODEL_PREFIX}/" "s3://${MODEL_BUCKET}/models/latest/" --recursive
+      # Tell the server exactly which model this deployment was tested with.
+      - printf 'MODEL_S3_BUCKET=%s\nMODEL_S3_PREFIX=%s\nAWS_DEFAULT_REGION=%s\n' "$MODEL_BUCKET" "$MODEL_PREFIX" "$AWS_REGION" > deploy/app.env
+      - cat deploy/app.env
+      # Guard against Windows checkouts: strip CRLF and make hook scripts executable.
+      - sed -i 's/\r$//' scripts/*.sh deploy/*.sh deploy/*.service
+      - chmod +x scripts/*.sh deploy/*.sh
+
+artifacts:
+  # The model is NOT in the bundle; the server downloads it from S3 on start-up.
+  files:
+    - appspec.yml
+    - app.py
+    - requirements.txt
+    - src/**/*
+    - frontend/**/*
+    - scripts/**/*
+    - deploy/**/*
+
+cache:
+  paths:
+    - /root/.cache/pip/**/*
