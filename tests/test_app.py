@@ -28,7 +28,7 @@ def test_health():
 def test_frontend_is_served():
     response = client.get("/")
     assert response.status_code == 200
-    assert "Used Car Price Prediction" in response.text
+    assert 'id="prediction-form"' in response.text
 
 
 def test_prediction():
